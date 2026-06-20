@@ -133,11 +133,12 @@ uvx --from git+https://github.com/elhumbertoz/skill-ninja skill-ninja
 Pluggable adapters — mix and match:
 
 - **GitHub** — discovers `SKILL.md` across a repo, monorepo-aware via the Git Trees API. Reference: [`anthropics/skills`](https://github.com/anthropics/skills).
-- **Generic git** — shallow clone of any git URL.
-- **agentskills.io** — the community catalog/showcase as a discovery source.
+- **Generic git** — shallow clone of any git URL (GitLab, Codeberg, self-hosted…).
 - **Local filesystem** — index your own skill folders.
 
-Add or remove sources at runtime with the `*_source` tools.
+Add or remove sources at runtime with the `add_source` / `remove_source` tools; refresh is incremental (unchanged sources are skipped).
+
+> The community site [agentskills.io](https://agentskills.io) is **not** a source here — it's documentation + a showcase of *products* that support the format, not a catalog of downloadable skills. Skills live in git repos, which the adapters above already cover.
 
 ---
 
@@ -145,8 +146,8 @@ Add or remove sources at runtime with the `*_source` tools.
 
 A solid core, growing outward:
 
-- **Core:** stdio MCP server + GitHub adapter + `SKILL.md` parsing/validation + FTS5 search + `search_skills` / `download_skill` over `anthropics/skills`, runnable via `uvx`.
-- **Multi-source:** generic git, agentskills.io, and local FS adapters; source management; incremental refresh.
+- ✅ **Core:** stdio MCP server + GitHub adapter + `SKILL.md` parsing/validation + FTS5 search + `search_skills` / `download_skill` over `anthropics/skills`, runnable via `uvx`.
+- ✅ **Multi-source:** generic git + local FS adapters; source management (`add_source`/`remove_source`); incremental refresh.
 - **Search quality:** optional semantic backend, hybrid (lexical + vector) search, filters, auto-categorization.
 - **DX & distribution:** HTTP/SSE transport, packaging, verified per-client setup docs.
 

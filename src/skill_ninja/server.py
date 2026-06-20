@@ -120,19 +120,41 @@ def list_local_skills() -> dict:
 
 @mcp.tool()
 def list_sources() -> dict:
-    """List the configured catalog sources and their index status."""
+    """List the registered catalog sources, their index status and skill counts."""
     sources = get_catalog().list_sources()
     return {"count": len(sources), "sources": sources}
 
 
 @mcp.tool()
-def refresh_catalog(source: str | None = None) -> dict:
+def add_source(url: str, source_type: str | None = None) -> dict:
+    """Register a new source to discover skills from.
+
+    ``url`` may be a GitHub repo (``https://github.com/owner/repo``), any git URL
+    (``…​.git``), or a local folder path. ``source_type`` (github | git | local) is
+    inferred when omitted. The new source is indexed lazily on the next search, or
+    immediately via ``refresh_catalog``.
+    """
+    return _safe(get_catalog().add_source, url, source_type)
+
+
+@mcp.tool()
+def remove_source(url: str, purge: bool = False) -> dict:
+    """Deregister a source so it's no longer refreshed.
+
+    By default already-indexed skills from it are left in place; set ``purge=true`` to
+    also drop them from the index (downloaded files on disk are never deleted).
+    """
+    return _safe(get_catalog().remove_source, url, purge)
+
+
+@mcp.tool()
+def refresh_catalog(source: str | None = None, force: bool = False) -> dict:
     """Re-index the catalog from its sources (all, or one source URL).
 
-    Normally unnecessary — sources are auto-indexed on first search. Use this to pull
-    newly added skills or update pinned versions.
+    Normally unnecessary — sources are auto-indexed on first search. Incremental:
+    sources whose version is unchanged are skipped unless ``force=true``.
     """
-    return _safe(get_catalog().refresh, source)
+    return _safe(get_catalog().refresh, source, force=force)
 
 
 def main() -> None:

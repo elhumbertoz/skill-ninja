@@ -194,7 +194,47 @@ class Database:
         rows = self.conn.execute("\n".join(sql), params).fetchall()
         return [(_row_to_record(r), r["rank"]) for r in rows]
 
-    # -- sources ----------------------------------------------------------
+    # -- sources (the `sources` table is the registry of where to discover) --
+    def register_source(self, source_id: str, source_type: str, url: str) -> bool:
+        """Add a source to the registry. Returns True if newly added (else exists)."""
+        cur = self.conn.execute(
+            "INSERT OR IGNORE INTO sources (id, type, url) VALUES (?, ?, ?)",
+            (source_id, source_type, url),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def seed_sources(self, sources: list[tuple[str, str, str]]) -> None:
+        """Ensure default sources exist (id, type, url), without resetting state."""
+        for source_id, source_type, url in sources:
+            self.register_source(source_id, source_type, url)
+
+    def remove_source(self, source_id: str) -> bool:
+        """Deregister a source. Returns True if it existed. Skills are left intact
+        unless purged separately."""
+        cur = self.conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_skills_for_source(self, source_type: str, url: str) -> int:
+        """Purge indexed skill records originating from a source (FTS kept in sync).
+
+        Does not touch already-downloaded files on disk — only the index.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM skills WHERE source_type = ? AND source_url = ?",
+            (source_type, url),
+        ).fetchall()
+        ids = [r["id"] for r in rows]
+        for skill_id in ids:
+            self.conn.execute("DELETE FROM skills_fts WHERE skill_id = ?", (skill_id,))
+        self.conn.execute(
+            "DELETE FROM skills WHERE source_type = ? AND source_url = ?",
+            (source_type, url),
+        )
+        self.conn.commit()
+        return len(ids)
+
     def record_source_refresh(
         self, source_id: str, source_type: str, url: str, version: str | None
     ) -> None:
@@ -215,8 +255,16 @@ class Database:
             "SELECT * FROM sources WHERE id = ?", (source_id,)
         ).fetchone()
 
-    def is_source_indexed(self, source_id: str) -> bool:
-        return self.get_source(source_id) is not None
+    def source_refreshed(self, source_id: str) -> bool:
+        """True if the source has been indexed at least once (has a pinned version)."""
+        row = self.get_source(source_id)
+        return row is not None and row["version"] is not None
+
+    def count_skills_for_source(self, source_type: str, url: str) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM skills WHERE source_type = ? AND source_url = ?",
+            (source_type, url),
+        ).fetchone()[0]
 
     def list_sources(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM sources ORDER BY id").fetchall()

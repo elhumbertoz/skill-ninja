@@ -16,9 +16,9 @@ from pathlib import Path
 
 import httpx
 
-from .config import Config, load_config
+from .config import Config, Source, load_config
 from .models import SkillRecord
-from .sources import GitHubAdapter, SourceAdapter, SourceError
+from .sources import GitAdapter, GitHubAdapter, LocalAdapter, SourceAdapter, SourceError
 from .storage import Database
 
 
@@ -33,7 +33,11 @@ class Catalog:
         self._client = self._build_client()
         self._adapters: dict[str, SourceAdapter] = {
             "github": GitHubAdapter(self._client),
+            "git": GitAdapter(self.config.data_dir / "clones"),
+            "local": LocalAdapter(),
         }
+        # Seed default sources into the registry (idempotent).
+        self.db.seed_sources([(s.id, s.type, s.url) for s in self.config.sources])
 
     def _build_client(self) -> httpx.Client:
         headers = {
@@ -61,38 +65,59 @@ class Catalog:
         return adapter
 
     # -- Flow C: index / refresh -----------------------------------------
-    def refresh(self, source_url: str | None = None) -> dict:
-        """(Re)index one source (by url) or all configured sources."""
-        if source_url:
-            sources = [s for s in self.config.sources if s.url == source_url]
-            if not sources:
-                raise CatalogError(f"source not configured: {source_url!r}")
-        else:
-            sources = list(self.config.sources)
+    def _registered_sources(self) -> list[Source]:
+        return [Source(type=r["type"], url=r["url"]) for r in self.db.list_sources()]
 
-        per_source = []
-        total = 0
-        warnings: list[str] = []
+    def _index_source(self, src: Source, *, force: bool) -> dict:
+        """Index one source, skipping the walk if its version is unchanged."""
+        adapter = self._adapter_for(src.type)
+        version = adapter.latest_version(src)
+        if not force and self.db.source_refreshed(src.id):
+            current = self.db.get_source(src.id)
+            if current is not None and current["version"] == version:
+                return {
+                    "source": src.url,
+                    "version": version,
+                    "skills": self.db.count_skills_for_source(src.type, src.url),
+                    "skipped": True,
+                }
+        result = adapter.discover(src, version)
+        self.db.upsert_skills(result.records)
+        self.db.record_source_refresh(src.id, src.type, src.url, result.version)
+        return {
+            "source": src.url,
+            "version": result.version,
+            "skills": len(result.records),
+            "skipped": False,
+            "warnings": result.warnings,
+        }
+
+    def refresh(self, source_url: str | None = None, *, force: bool = False) -> dict:
+        """(Re)index one registered source (by url) or all of them.
+
+        Incremental: a source whose version is unchanged since last refresh is
+        skipped unless ``force`` is set.
+        """
+        sources = self._registered_sources()
+        if source_url:
+            sources = [s for s in sources if s.url == source_url]
+            if not sources:
+                raise CatalogError(f"source not registered: {source_url!r}")
+
+        per_source, indexed, warnings = [], 0, []
         for src in sources:
-            adapter = self._adapter_for(src.type)
-            result = adapter.discover(src)
-            self.db.upsert_skills(result.records)
-            self.db.record_source_refresh(src.id, src.type, src.url, result.version)
-            total += len(result.records)
-            warnings.extend(result.warnings)
-            per_source.append(
-                {"source": src.url, "version": result.version, "skills": len(result.records)}
-            )
-        return {"indexed": total, "sources": per_source, "warnings": warnings}
+            info = self._index_source(src, force=force)
+            warnings.extend(info.pop("warnings", []))
+            per_source.append(info)
+            if not info["skipped"]:
+                indexed += info["skills"]
+        return {"indexed": indexed, "sources": per_source, "warnings": warnings}
 
     def ensure_indexed(self) -> None:
-        """Lazy auto-index: index any configured source not yet in the catalog."""
-        pending = [s for s in self.config.sources if not self.db.is_source_indexed(s.id)]
-        for src in pending:
-            adapter = self._adapter_for(src.type)
-            result = adapter.discover(src)
-            self.db.upsert_skills(result.records)
-            self.db.record_source_refresh(src.id, src.type, src.url, result.version)
+        """Lazy auto-index: index any registered source not yet refreshed."""
+        for src in self._registered_sources():
+            if not self.db.source_refreshed(src.id):
+                self._index_source(src, force=False)
 
     # -- Flow A: search ---------------------------------------------------
     def search(
@@ -190,20 +215,69 @@ class Catalog:
         ]
 
     def list_sources(self) -> list[dict]:
-        indexed = {row["id"]: row for row in self.db.list_sources()}
         out = []
-        for src in self.config.sources:
-            row = indexed.get(src.id)
+        for r in self.db.list_sources():
             out.append(
                 {
-                    "type": src.type,
-                    "url": src.url,
-                    "indexed": row is not None,
-                    "version": row["version"] if row else None,
-                    "last_refreshed": row["last_refreshed"] if row else None,
+                    "type": r["type"],
+                    "url": r["url"],
+                    "indexed": r["version"] is not None,
+                    "version": r["version"],
+                    "last_refreshed": r["last_refreshed"],
+                    "skills": self.db.count_skills_for_source(r["type"], r["url"]),
                 }
             )
         return out
+
+    # -- Source management (Phase 2) -------------------------------------
+    @staticmethod
+    def _infer_type(url: str) -> str:
+        u = url.strip()
+        if u.startswith(("http://github.com/", "https://github.com/", "git@github.com:")):
+            return "github"
+        if u.endswith(".git") or u.startswith(("git@", "ssh://", "git://")):
+            return "git"
+        if Path(u).expanduser().is_dir():
+            return "local"
+        if u.startswith(("http://", "https://")):
+            return "git"  # a generic remote git repo served over http(s)
+        raise CatalogError(
+            f"cannot infer source type from {url!r}; pass source_type explicitly "
+            "(github | git | local)"
+        )
+
+    def add_source(self, url: str, source_type: str | None = None) -> dict:
+        stype = source_type or self._infer_type(url)
+        if stype not in self._adapters:
+            raise CatalogError(
+                f"unsupported source type {stype!r}; supported: {sorted(self._adapters)}"
+            )
+        norm_url = url
+        if stype == "local":
+            path = Path(url).expanduser()
+            if not path.is_dir():
+                raise CatalogError(f"local path is not a directory: {url!r}")
+            norm_url = str(path.resolve())
+        src = Source(type=stype, url=norm_url)
+        added = self.db.register_source(src.id, src.type, src.url)
+        return {"added": added, "already_present": not added, "type": src.type, "url": src.url}
+
+    def remove_source(self, url: str, purge: bool = False) -> dict:
+        match = next(
+            (r for r in self.db.list_sources() if url in (r["url"], r["id"])), None
+        )
+        if match is None:
+            raise CatalogError(f"source not registered: {url!r}")
+        self.db.remove_source(match["id"])
+        purged = (
+            self.db.delete_skills_for_source(match["type"], match["url"]) if purge else 0
+        )
+        return {
+            "removed": True,
+            "type": match["type"],
+            "url": match["url"],
+            "purged_skills": purged,
+        }
 
     # -- local-store helpers ---------------------------------------------
     def _local_skill_md_path(self, record: SkillRecord) -> Path | None:

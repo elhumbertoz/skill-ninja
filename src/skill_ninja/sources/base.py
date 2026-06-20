@@ -8,12 +8,15 @@ agentskills.io, local FS) implements this interface; the catalog is origin-agnos
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import Source
 from ..models import SkillRecord
+
+MANIFEST_NAME = ".skill-ninja.json"
 
 
 class SourceError(RuntimeError):
@@ -55,8 +58,20 @@ class SourceAdapter(ABC):
     source_type: str
 
     @abstractmethod
-    def discover(self, source: Source) -> DiscoverResult:
-        """Walk the source and return metadata records (no full bundles)."""
+    def latest_version(self, source: Source) -> str:
+        """Cheaply compute the current version token of a source (e.g. commit SHA).
+
+        Used for incremental refresh: if it matches the last indexed version, the
+        full ``discover`` walk can be skipped.
+        """
+
+    @abstractmethod
+    def discover(self, source: Source, version: str | None = None) -> DiscoverResult:
+        """Walk the source and return metadata records (no full bundles).
+
+        If ``version`` is given, records are pinned to it (avoids recomputing it);
+        otherwise the adapter resolves the current version itself.
+        """
 
     @abstractmethod
     def get_skill_md(self, record: SkillRecord) -> str:
@@ -73,3 +88,27 @@ class SourceAdapter(ABC):
     @abstractmethod
     def download(self, record: SkillRecord, dest: Path) -> BundleManifest:
         """Download the full bundle into ``dest`` and return its manifest."""
+
+
+def write_bundle_manifest(
+    bundle_dir: Path, record: SkillRecord, files: list[BundleFile]
+) -> BundleManifest:
+    """Write a ``.skill-ninja.json`` manifest into a downloaded bundle dir."""
+    manifest = BundleManifest(
+        skill_id=record.id, version=record.version, dest=str(bundle_dir), files=files
+    )
+    (bundle_dir / MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                **manifest.to_dict(),
+                "name": record.name,
+                "source_type": record.source_type,
+                "source_url": record.source_url,
+                "repo_path": record.repo_path,
+                "license": record.license,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return manifest

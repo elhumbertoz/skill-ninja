@@ -10,7 +10,6 @@ budget even for a monorepo with many skills.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import httpx
@@ -19,11 +18,17 @@ from ..config import Source
 from ..index.parser import SkillParseError, parse_skill_md
 from ..index.validation import validate
 from ..models import SkillRecord
-from .base import BundleFile, BundleManifest, DiscoverResult, SourceAdapter, SourceError
+from .base import (
+    BundleFile,
+    BundleManifest,
+    DiscoverResult,
+    SourceAdapter,
+    SourceError,
+    write_bundle_manifest,
+)
 
 API = "https://api.github.com"
 RAW = "https://raw.githubusercontent.com"
-MANIFEST_NAME = ".skill-ninja.json"
 
 
 def _owner_repo(url: str) -> tuple[str, str]:
@@ -91,9 +96,13 @@ class GitHubAdapter(SourceAdapter):
         return resp.content
 
     # -- adapter API ------------------------------------------------------
-    def discover(self, source: Source) -> DiscoverResult:
+    def latest_version(self, source: Source) -> str:
         owner, repo = _owner_repo(source.url)
-        sha = self._latest_commit(owner, repo)
+        return self._latest_commit(owner, repo)
+
+    def discover(self, source: Source, version: str | None = None) -> DiscoverResult:
+        owner, repo = _owner_repo(source.url)
+        sha = version or self._latest_commit(owner, repo)
         tree = self._tree(owner, repo, sha)
 
         skill_paths = [
@@ -180,23 +189,4 @@ class GitHubAdapter(SourceAdapter):
             target.write_bytes(content)
             written.append(BundleFile(path=f.path, size=len(content)))
 
-        manifest = BundleManifest(
-            skill_id=record.id,
-            version=record.version,
-            dest=str(bundle_dir),
-            files=written,
-        )
-        (bundle_dir / MANIFEST_NAME).write_text(
-            json.dumps(
-                {
-                    **manifest.to_dict(),
-                    "name": record.name,
-                    "source_url": record.source_url,
-                    "repo_path": record.repo_path,
-                    "license": record.license,
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-        return manifest
+        return write_bundle_manifest(bundle_dir, record, written)
