@@ -1,84 +1,83 @@
 # 🥷 skill-ninja
 
-**A federated index of Agent Skills + a local download manager, exposed over MCP to any AI agent.**
+### Give your AI agent just-in-time skills. One MCP server. Any IDE.
 
-> **Status:** design / early development. No code is published yet — see [the roadmap](#roadmap). This README describes the project's goals and the v1 design.
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/Model_Context_Protocol-compatible-7C3AED.svg)](https://modelcontextprotocol.io)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-3776AB.svg)](#tech-stack)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 
-skill-ninja is an open-source [MCP](https://modelcontextprotocol.io) server that keeps a local catalog of [Agent Skills](https://agentskills.io) and lets **any MCP client** — Claude Code, Cursor, VS Code, OpenCode, Antigravity, Gemini CLI, Codex, and others — search it in natural language and download skills on demand.
+**skill-ninja lets your AI agent find and pull the exact [Agent Skill](https://agentskills.io) it needs — the moment it needs it** — from across GitHub, agentskills.io, and your own folders. No pre-installing. No context bloat. Works in **any MCP client**: Claude Code, Cursor, VS Code, OpenCode, Antigravity, Gemini CLI, Codex…
 
 ---
 
-## Why
+## ⚡ Install in one sentence
 
-Agent Skills are spread across many repos and registries (`anthropics/skills`, generic git repos, agentskills.io, local folders). Finding the right one and wiring it into your agent is manual. skill-ninja turns that into one MCP tool call:
+Just tell your agent:
 
-> *"search for a skill that helps with CSS design"* → ranked candidates → *"download it"* → it lands in your skills folder.
+> **"Install the MCP server at https://github.com/elhumbertoz/skill-ninja"**
 
-**Design principles:** open source · trivial to install · usable from any IDE. Concretely: zero-install launch, instant first startup, no mandatory API keys, no external infrastructure.
+It reads this README, runs the command below, and you're done. Or do it yourself in one line:
+
+```bash
+# Claude Code
+claude mcp add skill-ninja -- uvx skill-ninja
+```
+
+```bash
+# Just run it (zero-install via uv)
+uvx skill-ninja
+```
+
+That's the **whole** install. No model download. No database to set up. No API key. It starts instantly. 🚀
+
+<sub>⭐ Find it handy? **Star the repo** — it helps other devs discover it.</sub>
+
+---
+
+## The problem it kills
+
+You ask your agent to **edit an `.xlsx` file**. It doesn't know the right approach, so it guesses — wrong library, broken formatting, an afternoon lost.
+
+A skill that teaches it *exactly* how to do this already exists. But skills are scattered across dozens of repos and registries, and wiring them in is manual. Pre-installing them all? That bloats your context with stuff you don't need 99% of the time.
+
+**skill-ninja flips it:**
+
+| Without skill-ninja | With skill-ninja |
+|---|---|
+| Hunt GitHub for the right skill | Agent calls `search_skills("xlsx")` |
+| Copy files into your skills folder | Agent pulls the proven skill into context |
+| Hope it's current and correct | It's fetched from origin, version-pinned |
+| Repeat for every task | One tool. Every task. Any IDE. |
+
+Your agent gains **expertise on demand** — it carries one cheap search tool and brings in only the *specific* skill it needs, *when* it needs it.
+
+---
+
+## Use it
+
+Once registered, just talk to your agent in plain language:
+
+- 💬 *"Find a skill for editing xlsx files and use it."*
+- 💬 *"Search skills about web-app testing and download the best one."*
+- 💬 *"What skills have I already downloaded?"*
+
+Under the hood it chains the MCP tools below: **search → download → read.**
 
 ---
 
 ## How it works
 
-skill-ninja keeps **two layers**, which is what makes it cheap and fast:
+Two layers — that's the trick that keeps it **cheap, fast, and offline-first**:
 
 | Layer | What | Cost |
 |-------|------|------|
-| **Metadata index** | `name` + `description` + source for every discovered skill, *without* downloading the bundle | light — search runs here |
-| **Local store** | full bundles (`SKILL.md` + `scripts/` + `references/` + `assets/`) you actually download | heavy — materialized on demand |
+| **🔍 Metadata index** | `name` + `description` + source for every discovered skill, *without* downloading the bundle | light — search runs here |
+| **📦 Local store** | full bundles (`SKILL.md` + `scripts/` + `references/` + `assets/`) you actually download | heavy — fetched on demand |
 
-Search hits the lightweight index; download materializes the full skill. By default, search is **lexical (SQLite FTS5)** — no model downloads, no API keys, works offline. A semantic/embedding backend is an **opt-in extra** for those who want it.
+Search hits the lightweight index; download materializes the full skill. Search is **lexical (SQLite FTS5)** by default — **no model downloads, no API keys, works offline.** A semantic/embedding backend is an **opt-in extra** for whoever wants it.
 
-skill-ninja is a **fetcher, not a mirror**: it always downloads from the original source and caches locally for you (like a package manager). It never re-hosts skills, and surfaces each skill's `license` so you decide.
-
----
-
-## Quick start
-
-> ⚠️ Not yet published. The commands below show the intended usage once v1 ships.
-
-skill-ninja runs as a zero-install MCP server via [`uv`](https://docs.astral.sh/uv/):
-
-```bash
-uvx skill-ninja
-```
-
-That's the whole install. No model download, no database to set up — it starts instantly.
-
-### Register it in your MCP client
-
-Most clients accept a standard stdio MCP server entry. Examples:
-
-**Claude Code**
-
-```bash
-claude mcp add skill-ninja -- uvx skill-ninja
-```
-
-**Cursor / VS Code / Antigravity / OpenCode** (any client using the standard `mcpServers` JSON):
-
-```jsonc
-{
-  "mcpServers": {
-    "skill-ninja": {
-      "command": "uvx",
-      "args": ["skill-ninja"]
-    }
-  }
-}
-```
-
-> Each client stores its config in a different place (a settings file, a `.mcp.json`, or a UI). Check your client's MCP docs for where to paste this. Per-client snippets will live in the docs as they're verified.
-
-### Use it
-
-Once registered, just ask your agent in natural language:
-
-- *"Find a skill for working with PDFs and download it."*
-- *"Search skills about web-app testing."*
-- *"List the skills I've already downloaded."*
-
-The agent calls the tools below under the hood.
+> **Fetcher, not mirror.** skill-ninja always downloads from the original source and caches locally for you — like a package manager (`apt`/`npm`). It never re-hosts skills, and surfaces each skill's `license` so *you* decide.
 
 ---
 
@@ -94,45 +93,78 @@ The agent calls the tools below under the hood.
 | `list_sources` / `add_source` / `remove_source` | `url?`, `type?` | source state |
 | `refresh_catalog` | `source?` | re-index summary |
 
-Tools return structured JSON so the agent can chain actions: **search → download → read**.
+Everything returns structured JSON so the agent can decide the next move.
+
+---
+
+## Works in your IDE
+
+**Claude Code** — one line:
+
+```bash
+claude mcp add skill-ninja -- uvx skill-ninja
+```
+
+**Cursor · VS Code · Antigravity · OpenCode · Gemini CLI · Codex** — any client using the standard `mcpServers` JSON:
+
+```jsonc
+{
+  "mcpServers": {
+    "skill-ninja": {
+      "command": "uvx",
+      "args": ["skill-ninja"]
+    }
+  }
+}
+```
+
+> Each client stores this config in a different place (a settings file, a `.mcp.json`, or a UI). Check your client's MCP docs for where it goes.
+
+Prefer the bleeding edge? Install straight from source:
+
+```bash
+uvx --from git+https://github.com/elhumbertoz/skill-ninja skill-ninja
+```
 
 ---
 
 ## Sources
 
-skill-ninja aggregates skills from pluggable adapters:
+Pluggable adapters — mix and match:
 
-- **GitHub** — discovers `SKILL.md` files across a repo (monorepo-aware via the Git Trees API). Reference: [`anthropics/skills`](https://github.com/anthropics/skills).
+- **GitHub** — discovers `SKILL.md` across a repo, monorepo-aware via the Git Trees API. Reference: [`anthropics/skills`](https://github.com/anthropics/skills).
 - **Generic git** — shallow clone of any git URL.
 - **agentskills.io** — the community catalog/showcase as a discovery source.
 - **Local filesystem** — index your own skill folders.
 
-Add or remove sources at runtime via the `*_source` tools.
+Add or remove sources at runtime with the `*_source` tools.
 
 ---
 
 ## Roadmap
 
-- **Phase 1 — MVP:** stdio server + GitHub adapter + `SKILL.md` parsing/validation + FTS5 search + `search_skills` / `download_skill` over `anthropics/skills`. Runnable via `uvx`.
-- **Phase 2 — Multi-source:** generic git, agentskills.io, and local FS adapters; source management; incremental refresh.
-- **Phase 3 — Search quality:** optional semantic backend, hybrid (lexical + vector) search, filters, auto-categorization.
-- **Phase 4 — DX/distribution:** HTTP/SSE transport, packaging, and verified per-client setup docs.
+A solid core, growing outward:
+
+- **Core:** stdio MCP server + GitHub adapter + `SKILL.md` parsing/validation + FTS5 search + `search_skills` / `download_skill` over `anthropics/skills`, runnable via `uvx`.
+- **Multi-source:** generic git, agentskills.io, and local FS adapters; source management; incremental refresh.
+- **Search quality:** optional semantic backend, hybrid (lexical + vector) search, filters, auto-categorization.
+- **DX & distribution:** HTTP/SSE transport, packaging, verified per-client setup docs.
+
+PRs toward any of these are welcome.
 
 ---
 
 ## Tech stack
 
-Python 3.12+ · [`uv`](https://docs.astral.sh/uv/) · [FastMCP](https://github.com/modelcontextprotocol/python-sdk) · SQLite + FTS5 (search) · `httpx` + GitHub REST. Optional semantic search via `fastembed` + `sqlite-vec` (`skill-ninja[semantic]`).
-
-A TypeScript/Node implementation is a viable alternative if `npx` distribution is preferred.
+Python 3.12+ · [`uv`](https://docs.astral.sh/uv/) · [FastMCP](https://github.com/modelcontextprotocol/python-sdk) · SQLite + FTS5 (search) · `httpx` + GitHub REST. Optional semantic search via `fastembed` + `sqlite-vec` (`skill-ninja[semantic]`). A TypeScript/Node port is a viable alternative if `npx` distribution is preferred.
 
 ---
 
 ## Contributing
 
-Contributions are welcome — new source adapters and per-client setup docs are especially valuable. (Contribution guidelines will land alongside the first code drop.)
+Contributions are welcome — **new source adapters** and **verified per-client setup docs** are especially valuable. Open an issue to discuss, or send a PR.
 
-The Agent Skills format itself is documented in [agent-skills-reference.md](agent-skills-reference.md), and the full project design in [CLAUDE.md](CLAUDE.md).
+Format background: [agent-skills-reference.md](agent-skills-reference.md) · full design: [CLAUDE.md](CLAUDE.md).
 
 ---
 
