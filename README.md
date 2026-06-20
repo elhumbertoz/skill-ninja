@@ -128,6 +128,28 @@ Prefer the bleeding edge? Install straight from source:
 uvx --from git+https://github.com/elhumbertoz/skill-ninja skill-ninja
 ```
 
+### Remote / shared (HTTP transport)
+
+By default skill-ninja talks **stdio** (one server per client, local). To run it once and share it over the network, start it on an **HTTP** transport:
+
+```bash
+# Streamable-HTTP (recommended) — serves the MCP endpoint at http://<host>:<port>/mcp
+skill-ninja --transport streamable-http --host 0.0.0.0 --port 8000
+
+# or the legacy SSE transport (http://<host>:<port>/sse)
+skill-ninja --transport sse --port 8000
+```
+
+Equivalent env vars: `SKILL_NINJA_TRANSPORT`, `SKILL_NINJA_HOST`, `SKILL_NINJA_PORT`. Then point any HTTP-capable MCP client at the URL:
+
+```jsonc
+{
+  "mcpServers": {
+    "skill-ninja": { "url": "http://your-host:8000/mcp" }
+  }
+}
+```
+
 ---
 
 ## Sources
@@ -151,7 +173,7 @@ A solid core, growing outward:
 - ✅ **Core:** stdio MCP server + GitHub adapter + `SKILL.md` parsing/validation + FTS5 search + `search_skills` / `download_skill` over `anthropics/skills`, runnable via `uvx`.
 - ✅ **Multi-source:** generic git + local FS adapters; source management (`add_source`/`remove_source`); incremental refresh.
 - ✅ **Search quality:** opt-in semantic backend (`fastembed`) + hybrid (lexical + vector, RRF) search, filters, graceful fallback to lexical.
-- **DX & distribution:** HTTP/SSE transport, packaging, verified per-client setup docs.
+- ✅ **DX & distribution:** stdio + HTTP/SSE transports, `uv build` wheel/sdist, per-client setup docs. _(PyPI publish pending.)_
 
 PRs toward any of these are welcome.
 

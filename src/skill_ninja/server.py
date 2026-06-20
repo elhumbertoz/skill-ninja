@@ -1,4 +1,7 @@
-"""MCP server — registers the skill-ninja tools over stdio (FastMCP).
+"""MCP server — registers the skill-ninja tools (FastMCP).
+
+Runs over **stdio** by default; **HTTP** transports (``streamable-http`` or ``sse``)
+are available via ``--transport`` / ``SKILL_NINJA_TRANSPORT`` for remote/shared use.
 
 Startup is instant: creating the server only opens the local SQLite index and an
 HTTP client (no network, no model downloads). The configured sources are indexed
@@ -7,6 +10,8 @@ HTTP client (no network, no model downloads). The configured sources are indexed
 
 from __future__ import annotations
 
+import argparse
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -166,9 +171,39 @@ def refresh_catalog(source: str | None = None, force: bool = False) -> dict:
     return _safe(get_catalog().refresh, source, force=force)
 
 
-def main() -> None:
-    """Console entry point: run the MCP server over stdio."""
-    mcp.run()
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="skill-ninja",
+        description="MCP server that exposes Agent Skills to any agent via search.",
+    )
+    p.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default=os.environ.get("SKILL_NINJA_TRANSPORT", "stdio"),
+        help="MCP transport (default: stdio). HTTP transports are for remote/shared use.",
+    )
+    p.add_argument(
+        "--host",
+        default=os.environ.get("SKILL_NINJA_HOST", "127.0.0.1"),
+        help="Bind host for HTTP transports (default: 127.0.0.1).",
+    )
+    p.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("SKILL_NINJA_PORT", "8000")),
+        help="Bind port for HTTP transports (default: 8000).",
+    )
+    p.add_argument("--version", action="version", version=f"skill-ninja {__version__}")
+    return p
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Console entry point. Runs over stdio by default; HTTP transports optional."""
+    args = _build_arg_parser().parse_args(argv)
+    if args.transport != "stdio":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":
