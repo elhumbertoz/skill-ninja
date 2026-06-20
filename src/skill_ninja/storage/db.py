@@ -48,6 +48,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
     category,
     tokenize = 'porter unicode61'
 );
+
+CREATE TABLE IF NOT EXISTS skill_vectors (
+    skill_id  TEXT PRIMARY KEY,
+    version   TEXT NOT NULL,
+    dim       INTEGER NOT NULL,
+    embedding BLOB NOT NULL
+);
 """
 
 def _row_to_record(row: sqlite3.Row) -> SkillRecord:
@@ -194,6 +201,45 @@ class Database:
         rows = self.conn.execute("\n".join(sql), params).fetchall()
         return [(_row_to_record(r), r["rank"]) for r in rows]
 
+    # -- vectors (optional semantic backend) ------------------------------
+    def upsert_vector(self, skill_id: str, version: str, dim: int, blob: bytes) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO skill_vectors (skill_id, version, dim, embedding)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(skill_id) DO UPDATE SET
+                version=excluded.version, dim=excluded.dim, embedding=excluded.embedding
+            """,
+            (skill_id, version, dim, blob),
+        )
+        self.conn.commit()
+
+    def delete_vectors(self, skill_ids: list[str]) -> None:
+        self.conn.executemany(
+            "DELETE FROM skill_vectors WHERE skill_id = ?", [(i,) for i in skill_ids]
+        )
+        self.conn.commit()
+
+    def skills_needing_embedding(self) -> list[SkillRecord]:
+        """Skills with no vector, or whose stored vector is for a stale version."""
+        rows = self.conn.execute(
+            """
+            SELECT s.* FROM skills s
+            LEFT JOIN skill_vectors v ON v.skill_id = s.id
+            WHERE v.skill_id IS NULL OR v.version != s.version
+            """
+        ).fetchall()
+        return [_row_to_record(r) for r in rows]
+
+    def all_vectors(self) -> list[tuple[str, bytes]]:
+        rows = self.conn.execute(
+            "SELECT skill_id, embedding FROM skill_vectors"
+        ).fetchall()
+        return [(r["skill_id"], r["embedding"]) for r in rows]
+
+    def vector_count(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM skill_vectors").fetchone()[0]
+
     # -- sources (the `sources` table is the registry of where to discover) --
     def register_source(self, source_id: str, source_type: str, url: str) -> bool:
         """Add a source to the registry. Returns True if newly added (else exists)."""
@@ -228,6 +274,7 @@ class Database:
         ids = [r["id"] for r in rows]
         for skill_id in ids:
             self.conn.execute("DELETE FROM skills_fts WHERE skill_id = ?", (skill_id,))
+            self.conn.execute("DELETE FROM skill_vectors WHERE skill_id = ?", (skill_id,))
         self.conn.execute(
             "DELETE FROM skills WHERE source_type = ? AND source_url = ?",
             (source_type, url),

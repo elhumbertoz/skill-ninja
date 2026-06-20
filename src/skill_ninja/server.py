@@ -70,7 +70,16 @@ def search_skills(
     )
     if isinstance(results, dict):  # error
         return results
-    return {"query": query, "count": len(results), "results": results}
+    out = {
+        "query": query,
+        "count": len(results),
+        "results": results,
+        "backend": cat.effective_backend(),
+    }
+    downgraded = cat.config.search_backend != "lexical" and out["backend"] == "lexical"
+    if downgraded and cat.embedder_error:
+        out["note"] = f"semantic backend unavailable; used lexical. {cat.embedder_error}"
+    return out
 
 
 @mcp.tool()

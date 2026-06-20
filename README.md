@@ -75,7 +75,9 @@ Two layers — that's the trick that keeps it **cheap, fast, and offline-first**
 | **🔍 Metadata index** | `name` + `description` + source for every discovered skill, *without* downloading the bundle | light — search runs here |
 | **📦 Local store** | full bundles (`SKILL.md` + `scripts/` + `references/` + `assets/`) you actually download | heavy — fetched on demand |
 
-Search hits the lightweight index; download materializes the full skill. Search is **lexical (SQLite FTS5)** by default — **no model downloads, no API keys, works offline.** A semantic/embedding backend is an **opt-in extra** for whoever wants it.
+Search hits the lightweight index; download materializes the full skill. Search is **lexical (SQLite FTS5)** by default — **no model downloads, no API keys, works offline.**
+
+Want fuzzier matching? An **opt-in semantic / hybrid** backend (`pip install 'skill-ninja[semantic]'`, then `SKILL_NINJA_SEARCH=hybrid`) adds local embeddings via [`fastembed`](https://github.com/qdrant/fastembed) — so *"crunch some numbers in a workbook"* finds the `xlsx` skill even though it never says "spreadsheet." If the extra isn't installed, it silently stays lexical.
 
 > **Fetcher, not mirror.** skill-ninja always downloads from the original source and caches locally for you — like a package manager (`apt`/`npm`). It never re-hosts skills, and surfaces each skill's `license` so *you* decide.
 
@@ -148,7 +150,7 @@ A solid core, growing outward:
 
 - ✅ **Core:** stdio MCP server + GitHub adapter + `SKILL.md` parsing/validation + FTS5 search + `search_skills` / `download_skill` over `anthropics/skills`, runnable via `uvx`.
 - ✅ **Multi-source:** generic git + local FS adapters; source management (`add_source`/`remove_source`); incremental refresh.
-- **Search quality:** optional semantic backend, hybrid (lexical + vector) search, filters, auto-categorization.
+- ✅ **Search quality:** opt-in semantic backend (`fastembed`) + hybrid (lexical + vector, RRF) search, filters, graceful fallback to lexical.
 - **DX & distribution:** HTTP/SSE transport, packaging, verified per-client setup docs.
 
 PRs toward any of these are welcome.
@@ -157,7 +159,7 @@ PRs toward any of these are welcome.
 
 ## Tech stack
 
-Python 3.12+ · [`uv`](https://docs.astral.sh/uv/) · [FastMCP](https://github.com/modelcontextprotocol/python-sdk) · SQLite + FTS5 (search) · `httpx` + GitHub REST. Optional semantic search via `fastembed` + `sqlite-vec` (`skill-ninja[semantic]`). A TypeScript/Node port is a viable alternative if `npx` distribution is preferred.
+Python 3.12+ · [`uv`](https://docs.astral.sh/uv/) · [FastMCP](https://github.com/modelcontextprotocol/python-sdk) · SQLite + FTS5 (search) · `httpx` + GitHub REST · `git` CLI (generic-git source). Optional semantic search via `fastembed` + `numpy`, default model `BAAI/bge-small-en-v1.5` (`skill-ninja[semantic]`). A TypeScript/Node port is a viable alternative if `npx` distribution is preferred.
 
 ---
 

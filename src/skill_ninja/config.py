@@ -34,12 +34,21 @@ class Source:
         return f"{self.type}:{self.url}"
 
 
+VALID_BACKENDS = ("lexical", "semantic", "hybrid")
+DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+
+
 @dataclass(slots=True)
 class Config:
     data_dir: Path
     sources: list[Source]
     github_token: str | None = None
     user_agent: str = f"{APP_NAME}/0.1 (+https://github.com/elhumbertoz/skill-ninja)"
+    # Search backend: "lexical" (default, no deps) | "semantic" | "hybrid".
+    # semantic/hybrid require the opt-in `skill-ninja[semantic]` extra; if it's not
+    # installed the catalog transparently falls back to lexical.
+    search_backend: str = "lexical"
+    embed_model: str = DEFAULT_EMBED_MODEL
 
     # Derived paths -------------------------------------------------------
     @property
@@ -69,6 +78,17 @@ def load_config() -> Config:
 
     sources = [Source(type=t, url=u) for (t, u) in DEFAULT_SOURCES]
 
-    cfg = Config(data_dir=data_dir, sources=sources, github_token=token)
+    backend = os.environ.get("SKILL_NINJA_SEARCH", "lexical").strip().lower()
+    if backend not in VALID_BACKENDS:
+        backend = "lexical"
+    embed_model = os.environ.get("SKILL_NINJA_EMBED_MODEL", DEFAULT_EMBED_MODEL).strip()
+
+    cfg = Config(
+        data_dir=data_dir,
+        sources=sources,
+        github_token=token,
+        search_backend=backend,
+        embed_model=embed_model or DEFAULT_EMBED_MODEL,
+    )
     cfg.ensure_dirs()
     return cfg

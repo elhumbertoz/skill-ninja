@@ -27,7 +27,7 @@ class CatalogError(RuntimeError):
 
 
 class Catalog:
-    def __init__(self, config: Config | None = None):
+    def __init__(self, config: Config | None = None, *, embedder=None):
         self.config = config or load_config()
         self.db = Database(self.config.db_path)
         self._client = self._build_client()
@@ -38,6 +38,12 @@ class Catalog:
         }
         # Seed default sources into the registry (idempotent).
         self.db.seed_sources([(s.id, s.type, s.url) for s in self.config.sources])
+
+        # Optional semantic backend (lazy). `embedder` may be injected (tests).
+        self._injected_embedder = embedder
+        self._embedder = embedder
+        self._embedder_resolved = embedder is not None
+        self.embedder_error: str | None = None
 
     def _build_client(self) -> httpx.Client:
         headers = {
@@ -119,6 +125,56 @@ class Catalog:
             if not self.db.source_refreshed(src.id):
                 self._index_source(src, force=False)
 
+    # -- Semantic backend (optional, lazy) -------------------------------
+    def _get_embedder(self):
+        """Resolve the embedder once. Returns it, or None if unavailable."""
+        if self._embedder_resolved:
+            return self._embedder
+        self._embedder_resolved = True
+        if self.config.search_backend == "lexical":
+            self._embedder = None
+            return None
+        try:
+            from .search import semantic
+
+            self._embedder = semantic.load_embedder(self.config.embed_model)
+        except Exception as exc:  # SemanticUnavailable or import error → fall back
+            self._embedder = None
+            self.embedder_error = str(exc)
+        return self._embedder
+
+    def effective_backend(self) -> str:
+        """The backend actually in use (configured one, downgraded if unavailable)."""
+        if self.config.search_backend == "lexical":
+            return "lexical"
+        return self.config.search_backend if self._get_embedder() else "lexical"
+
+    def ensure_embedded(self) -> None:
+        """Embed any indexed skill that lacks a current vector."""
+        embedder = self._get_embedder()
+        if embedder is None:
+            return
+        from .search import semantic
+
+        pending = self.db.skills_needing_embedding()
+        if not pending:
+            return
+        texts = [f"{r.name}. {r.description}" for r in pending]
+        vectors = embedder.embed(texts)
+        for record, vec in zip(pending, vectors, strict=True):
+            blob = semantic.normalize_to_blob(vec)
+            self.db.upsert_vector(record.id, record.version, len(vec), blob)
+
+    @staticmethod
+    def _passes_filters(record, category, source_type, license) -> bool:
+        if category and record.category != category:
+            return False
+        if source_type and record.source_type != source_type:
+            return False
+        if license and (not record.license or license.lower() not in record.license.lower()):
+            return False
+        return True
+
     # -- Flow A: search ---------------------------------------------------
     def search(
         self,
@@ -130,18 +186,57 @@ class Catalog:
         license: str | None = None,
     ) -> list[dict]:
         self.ensure_indexed()
+        if self.effective_backend() == "lexical":
+            return self._lexical_search(
+                query, top_k, category=category, source_type=source_type, license=license
+            )
+        return self._vector_search(
+            query, top_k, category=category, source_type=source_type, license=license
+        )
+
+    def _lexical_search(self, query, top_k, *, category, source_type, license) -> list[dict]:
         hits = self.db.search(
-            query,
-            top_k=top_k,
-            category=category,
-            source_type=source_type,
-            license=license,
+            query, top_k=top_k, category=category, source_type=source_type, license=license
         )
         results = []
         for record, rank in hits:
             item = record.summary()
             item["score"] = round(-rank, 4)  # bm25: lower is better → negate for intuition
             results.append(item)
+        return results
+
+    def _vector_search(self, query, top_k, *, category, source_type, license) -> list[dict]:
+        from .search import semantic
+        from .search.hybrid import rrf_fuse
+
+        self.ensure_embedded()
+        embedder = self._get_embedder()
+        qvec = embedder.embed([query])[0]
+        # Retrieve a generous candidate pool, then fuse/filter down to top_k.
+        pool = max(top_k * 5, 50)
+        vec_hits = semantic.cosine_topk(qvec, self.db.all_vectors(), pool)
+        vec_ids = [sid for sid, _ in vec_hits]
+
+        if self.config.search_backend == "hybrid":
+            lex = self.db.search(query, top_k=pool)
+            lex_ids = [rec.id for rec, _ in lex]
+            ordered, scores = rrf_fuse(lex_ids, vec_ids)
+        else:  # semantic
+            ordered = vec_ids
+            scores = dict(vec_hits)
+
+        results = []
+        for sid in ordered:
+            record = self.db.get_skill(sid)
+            if record is None or not self._passes_filters(
+                record, category, source_type, license
+            ):
+                continue
+            item = record.summary()
+            item["score"] = round(scores.get(sid, 0.0), 4)
+            results.append(item)
+            if len(results) >= top_k:
+                break
         return results
 
     # -- Flow B: retrieval / download ------------------------------------
